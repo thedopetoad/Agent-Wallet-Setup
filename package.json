@@ -1,0 +1,34 @@
+{
+  "name": "@starling/agent-wallet",
+  "version": "1.0.0",
+  "description": "Create and store an agent's trading keys securely for the Starling MCP server. Generate per-chain keys, de-risk them per venue, and seal them in an encrypted local keystore. Keys never leave your box.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "bin": {
+    "agent-wallet": "dist/bin/agent-wallet.js"
+  },
+  "files": ["dist", "README.md", "KEYSTORE_FORMAT.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
+    "test": "npm run build && node --test dist/keystore/crypto.test.js dist/keystore/vectors.test.js",
+    "doctor": "npm run build && node dist/bin/agent-wallet.js doctor"
+  },
+  "keywords": ["mcp", "wallet", "keystore", "trading-agent", "starling", "non-custodial", "ed25519", "secp256k1"],
+  "license": "MIT",
+  "dependencies": {
+    "@noble/ciphers": "^1.2.0",
+    "@noble/curves": "^1.8.0",
+    "@noble/hashes": "^1.7.0",
+    "@scure/base": "^1.2.0",
+    "prompts": "^2.4.2"
+  },
+  "optionalDependencies": {
+    "@napi-rs/keyring": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/prompts": "^2.4.9",
+    "typescript": "^5.7.0"
+  }
+}
