@@ -11,6 +11,7 @@ const HELP = `Starling Agent Wallet — create & store keys for the Starling MCP
 
 Usage:
   agent-wallet init        Generate + encrypt your agent's keys (interactive)
+  agent-wallet import      Encrypt a private key you ALREADY have (--venue <chain>)
   agent-wallet doctor      Preflight + hygiene checks
   agent-wallet export      Print a key in a standard portable format
   agent-wallet unlock      Store the passphrase in the OS keychain (desktop)
@@ -38,6 +39,8 @@ async function main(): Promise<void> {
       return (await import("../cli/doctor.js")).run();
     case "export":
       return (await import("../cli/export.js")).run(rest);
+    case "import":
+      return (await import("../cli/import.js")).run(rest);
     case "unlock":
       return (await import("../cli/unlock.js")).run(rest);
     case "--version":

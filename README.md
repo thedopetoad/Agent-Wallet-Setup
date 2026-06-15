@@ -9,6 +9,13 @@ leave it.** The Starling MCP server reads the same keystore to sign — this too
 is the *producer*, the MCP server is the *consumer*, and the
 [Starling Keystore v1 format](./KEYSTORE_FORMAT.md) is the contract between them.
 
+> **This is the optional safety layer.** The
+> [Starling MCP](https://github.com/thedopetoad/Starling-MCP) works fine with a
+> plaintext key pasted into an env var — that's the easy path for testnet / small
+> float. This tool is for when you want your keys **encrypted at rest** instead,
+> with nothing to install but Node. Already have a key? `agent-wallet import`
+> encrypts it without regenerating.
+
 > **Prerequisite:** Node 20+ on your `PATH`. (MCP hosts like Claude Desktop and
 > Cursor do **not** bundle Node — run `node -v` to confirm. `agent-wallet doctor`
 > checks this for you.)
@@ -83,6 +90,7 @@ the float small and the master/treasury keys off this box.
 | command | does |
 |---|---|
 | `agent-wallet init` | generate + encrypt keys, write `mcp.json`, recovery sheet |
+| `agent-wallet import --venue <chain>` | encrypt a private key you ALREADY have (upgrade plaintext → encrypted) |
 | `agent-wallet doctor` | preflight + hygiene checks |
 | `agent-wallet unlock` | store the passphrase in the OS keychain |
 | `agent-wallet export --venue <chain>` | print a standard portable key for recovery |

@@ -43,10 +43,10 @@ export function buildMcpJson(cfg: StarlingConfig, pkgVersion = "1.0.0"): string 
           command: "npx",
           args: ["-y", `@starling/execution-mcp@${pkgVersion}`],
           env: {
-            STARLING_KEYSTORE_DIR: keystoreDir(),
+            // signing keys come from the encrypted keystore this tool wrote
+            STARLING_KEY_SOURCE: "keystore",
             STARLING_UNLOCK_MODE: cfg.unlockMode,
             STARLING_NETWORK: cfg.network,
-            STARLING_SIGNER_BACKEND: cfg.signerBackend,
             // analytics-only; NEVER on the signing path. Replace before use.
             STARLING_KEY: "sk_live_REPLACE_ME_analytics_only",
           },
