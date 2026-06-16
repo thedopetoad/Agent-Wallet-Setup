@@ -33,6 +33,8 @@ interface Flags {
   network: Network;
   venues: Chain[];
   treasury?: string;
+  treasuryEvm?: string;
+  treasurySol?: string;
   dailyCap?: number;
   unlock: UnlockMode;
   force: boolean;
@@ -54,6 +56,8 @@ function parseFlags(argv: string[]): Flags {
     network: has("--mainnet") ? "mainnet" : "testnet",
     venues,
     treasury: get("--treasury"),
+    treasuryEvm: get("--treasury-evm") ?? get("--treasury"),
+    treasurySol: get("--treasury-sol"),
     dailyCap: get("--daily-cap") ? Number(get("--daily-cap")) : undefined,
     unlock: (get("--unlock") as UnlockMode) ?? "keychain",
     force: has("--force"),
@@ -148,6 +152,10 @@ export async function runInit(argv: string[]): Promise<void> {
 
   const pass = await getPassphrase(f.nonInteractive);
   const lowRam = freeMem() < 256 * 1024 * 1024; // <256MiB free → use KDF floor
+  // Per-chain treasury sealed into each keystore (EVM addr for polygon/HL, base58
+  // for solana). The interactive mainnet gate above sets `treasury` (EVM).
+  const treasuryEvm = f.treasuryEvm ?? treasury;
+  const treasurySol = f.treasurySol;
   const wallets: Partial<Record<Chain, string>> = {};
   const recovery: RecoveryEntry[] = [];
 
@@ -161,7 +169,7 @@ export async function runInit(argv: string[]): Promise<void> {
           "solana",
           k.pubkeyBase58,
           randomUUID(),
-          { lowRam },
+          { lowRam, treasury: treasurySol },
         );
         if (loweredKdf) out("  ! low-RAM: KDF at OWASP minimum — use a longer passphrase");
         recovery.push({
@@ -180,7 +188,7 @@ export async function runInit(argv: string[]): Promise<void> {
           chain,
           k.address,
           randomUUID(),
-          { lowRam },
+          { lowRam, treasury: treasuryEvm },
         );
         if (loweredKdf) out("  ! low-RAM: KDF at OWASP minimum — use a longer passphrase");
         recovery.push({
@@ -210,7 +218,11 @@ export async function runInit(argv: string[]): Promise<void> {
     network,
     signerBackend: "local",
     unlockMode: f.unlock,
-    treasury: treasury ? Object.fromEntries(venues.map((v) => [v, treasury!])) : {},
+    treasury: Object.fromEntries(
+      venues
+        .map((v) => [v, v === "solana" ? treasurySol : treasuryEvm] as const)
+        .filter(([, a]) => !!a),
+    ),
     guardrails: {
       perTradeMaxUsd: 0,
       dailyNotionalCapUsd: dailyCap ?? 0,
