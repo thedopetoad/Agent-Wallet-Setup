@@ -34,14 +34,16 @@ export async function writeConfig(cfg: StarlingConfig): Promise<string> {
   return dest;
 }
 
-/** The exact mcp.json the MCP host (Claude/Cursor/your agent) consumes. */
-export function buildMcpJson(cfg: StarlingConfig, pkgVersion = "1.0.0"): string {
+/** The exact mcp.json the MCP host (Claude/Cursor/your agent) consumes.
+ * Runs the MCP straight from GitHub (no clone, no npm publish needed). To use a
+ * local clone instead, swap to: command "node", args ["<path>/dist/bin/starling-mcp.js"]. */
+export function buildMcpJson(cfg: StarlingConfig): string {
   return JSON.stringify(
     {
       mcpServers: {
         starling: {
           command: "npx",
-          args: ["-y", `@starling/execution-mcp@${pkgVersion}`],
+          args: ["-y", "github:thedopetoad/Starling-MCP"],
           env: {
             // signing keys come from the encrypted keystore this tool wrote
             STARLING_KEY_SOURCE: "keystore",

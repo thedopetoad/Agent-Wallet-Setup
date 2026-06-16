@@ -34,7 +34,11 @@ node dist/bin/agent-wallet.js init
 node dist/bin/agent-wallet.js doctor
 ```
 
-Once published you'll be able to skip the clone with `npx -y @starling/agent-wallet init`.
+Prefer not to clone? Run it straight from GitHub (npx builds + runs it for you):
+
+```bash
+npx -y github:thedopetoad/Agent-Wallet-Setup init
+```
 
 The wizard:
 
