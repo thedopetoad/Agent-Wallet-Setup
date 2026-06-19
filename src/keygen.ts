@@ -93,7 +93,7 @@ export function generateEvmKey(): EvmKey {
 /**
  * ed25519 for Solana, generated as a RAW 32-byte seed via the platform CSPRNG.
  * Raw-seed (not a non-extractable WebCrypto key) is required so the secret can
- * be exported into the encrypted keystore; the MCP server re-imports it to sign.
+ * be exported into the encrypted keystore; the MCP re-imports it to sign.
  */
 export function generateSolanaKey(): SolKey {
   const seed = csprng(32);

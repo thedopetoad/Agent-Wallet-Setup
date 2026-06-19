@@ -1,7 +1,7 @@
 // src/cli/unlock.ts
 // `agent-wallet unlock` — store the keystore passphrase in the OS keychain
 // (macOS Keychain / Windows Credential Manager / Linux Secret Service) so the
-// Starling MCP server can unlock at boot with STARLING_UNLOCK_MODE=keychain and
+// Starling MCP can unlock at boot with STARLING_UNLOCK_MODE=keychain and
 // no prompt. Uses the OPTIONAL @napi-rs/keyring native module; if it isn't
 // installed (or there's no Secret Service, e.g. headless Linux) it tells you to
 // use --unlock env|tpm|kms instead.
@@ -35,6 +35,6 @@ export async function run(_argv: string[]): Promise<void> {
   new Entry(SERVICE, ACCOUNT).setPassword(passStr);
   process.stdout.write(
     `Stored passphrase in the OS keychain (${SERVICE}/${ACCOUNT}).\n` +
-      "The MCP server will unlock at boot with STARLING_UNLOCK_MODE=keychain.\n",
+      "The MCP will unlock at boot with STARLING_UNLOCK_MODE=keychain.\n",
   );
 }

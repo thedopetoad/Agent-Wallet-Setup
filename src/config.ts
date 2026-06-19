@@ -34,16 +34,42 @@ export async function writeConfig(cfg: StarlingConfig): Promise<string> {
   return dest;
 }
 
+/** Absolute path to the user's local Starling-MCP clone's compiled entrypoint.
+ * Resolution order:
+ *   1. STARLING_MCP_PATH env (point it straight at dist/bin/starling-mcp.js)
+ *   2. STARLING_MCP_DIR env (the clone root; we append the bin path)
+ *   3. a clearly-marked placeholder the user MUST replace by hand.
+ * The MCP is run locally — the reader clones Starling-MCP, runs `npm install`
+ * (the prepare script builds it), then the agent host launches the compiled bin. */
+export const MCP_BIN_REL = "dist/bin/starling-mcp.js";
+const MCP_PATH_PLACEHOLDER = `/ABSOLUTE/PATH/TO/Starling-MCP/${MCP_BIN_REL}`;
+
+export function resolveMcpBinPath(): string {
+  const direct = process.env.STARLING_MCP_PATH?.trim();
+  if (direct) return direct;
+  const dir = process.env.STARLING_MCP_DIR?.trim();
+  if (dir) return path.join(dir, MCP_BIN_REL);
+  return MCP_PATH_PLACEHOLDER;
+}
+
+/** True when the mcp.json still holds the un-edited placeholder path. */
+export function mcpBinPathIsPlaceholder(p: string): boolean {
+  return p === MCP_PATH_PLACEHOLDER;
+}
+
 /** The exact mcp.json the MCP host (Claude/Cursor/your agent) consumes.
- * Runs the MCP straight from GitHub (no clone, no npm publish needed). To use a
- * local clone instead, swap to: command "node", args ["<path>/dist/bin/starling-mcp.js"]. */
+ * Launches the MCP from a LOCAL clone of Starling-MCP — clone it, run
+ * `npm install` (the prepare script builds to dist/), then the host runs the
+ * compiled bin via Node. Set STARLING_MCP_PATH / STARLING_MCP_DIR before init to
+ * have this filled in for you, or edit the `args` path afterward. */
 export function buildMcpJson(cfg: StarlingConfig): string {
   return JSON.stringify(
     {
       mcpServers: {
         starling: {
-          command: "npx",
-          args: ["-y", "github:thedopetoad/Starling-MCP"],
+          command: "node",
+          // point this at YOUR clone of Starling-MCP (…/dist/bin/starling-mcp.js)
+          args: [resolveMcpBinPath()],
           env: {
             // signing keys come from the encrypted keystore this tool wrote
             STARLING_KEY_SOURCE: "keystore",

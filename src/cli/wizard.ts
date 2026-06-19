@@ -19,6 +19,9 @@ import {
   appendIgnore,
   renderRecoverySheet,
   writeRecoverySheet,
+  resolveMcpBinPath,
+  mcpBinPathIsPlaceholder,
+  MCP_BIN_REL,
   type StarlingConfig,
   type RecoveryEntry,
   type Network,
@@ -242,9 +245,25 @@ export async function runInit(argv: string[]): Promise<void> {
   out(`  mcp.json     -> ${mcpPath}`);
   out(`  recovery     -> ${sheetPath}   (MOVE OFFLINE AND SHRED)`);
   out("");
+
+  // mcp.json launches the MCP from a LOCAL Starling-MCP clone. Tell the user to
+  // point the `args` path at wherever they cloned it (clone -> npm install builds
+  // dist/ via the prepare script -> the host runs dist/bin/starling-mcp.js).
+  const mcpBin = resolveMcpBinPath();
+  if (mcpBinPathIsPlaceholder(mcpBin)) {
+    out(
+      "  ! mcp.json points at a PLACEHOLDER path. Clone github.com/thedopetoad/Starling-MCP,\n" +
+        "    run `npm install` (its prepare script builds dist/), then edit mcp.json's\n" +
+        `    "args" to YOUR clone path, e.g. /home/you/Starling-MCP/${MCP_BIN_REL}.\n` +
+        "    (Or re-run init with STARLING_MCP_DIR set to the clone root to fill it in.)",
+    );
+  } else {
+    out(`  mcp.json launches the MCP from your local clone: ${mcpBin}`);
+  }
+  out("");
   out(
     network === "mainnet"
-      ? "Mainnet armed. Point your agent at mcp.json and start the Starling MCP server."
-      : "Testnet ready. Verify with the Starling MCP server, then re-run with --mainnet to arm real money.",
+      ? "Mainnet armed. Point your agent at mcp.json and start the MCP from your Starling-MCP clone."
+      : "Testnet ready. Verify with the MCP (your Starling-MCP clone), then re-run with --mainnet to arm real money.",
   );
 }

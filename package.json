@@ -1,7 +1,7 @@
 {
   "name": "@starling/agent-wallet",
   "version": "1.0.0",
-  "description": "Create and store an agent's trading keys securely for the Starling MCP server. Generate per-chain keys, de-risk them per venue, and seal them in an encrypted local keystore. Keys never leave your box.",
+  "description": "Create and store an agent's trading keys securely for the Starling MCP. Generate per-chain keys, de-risk them per venue, and seal them in an encrypted local keystore. Keys never leave your box.",
   "type": "module",
   "engines": { "node": ">=20" },
   "bin": {

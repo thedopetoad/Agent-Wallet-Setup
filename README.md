@@ -1,12 +1,12 @@
 # Starling Agent Wallet
 
 **The safe way to create and store an agent's trading keys for the
-[Starling MCP server](https://github.com/thedopetoad/Starling-MCP).**
+[Starling MCP](https://github.com/thedopetoad/Starling-MCP).**
 
 Generate per-chain keys, de-risk each one for its venue, and seal them in an
 encrypted local keystore. **Your keys are generated on your machine and never
-leave it.** The Starling MCP server reads the same keystore to sign — this tool
-is the *producer*, the MCP server is the *consumer*, and the
+leave it.** The Starling MCP reads the same keystore to sign — this tool
+is the *producer*, the MCP is the *consumer*, and the
 [Starling Keystore v1 format](./KEYSTORE_FORMAT.md) is the contract between them.
 
 > **This is the optional safety layer.** The
@@ -22,10 +22,12 @@ is the *producer*, the MCP server is the *consumer*, and the
 
 ## Quick start
 
+Clone the repo and run it yourself — nothing is published to npm.
+
 ```bash
-# from a clone of this repo
-npm install
-npm run build
+git clone https://github.com/thedopetoad/Agent-Wallet-Setup
+cd Agent-Wallet-Setup
+npm install            # the `prepare` script builds to dist/ for you
 
 # generate + encrypt your agent's wallet (interactive)
 node dist/bin/agent-wallet.js init
@@ -34,11 +36,8 @@ node dist/bin/agent-wallet.js init
 node dist/bin/agent-wallet.js doctor
 ```
 
-Prefer not to clone? Run it straight from GitHub (npx builds + runs it for you):
-
-```bash
-npx -y github:thedopetoad/Agent-Wallet-Setup init
-```
+`npm install` runs the `prepare` script, which builds `dist/` — so a separate
+`npm run build` is **optional** (run it only to rebuild after editing source).
 
 The wizard:
 
@@ -53,6 +52,13 @@ The wizard:
    to `.gitignore`/`.dockerignore`, and renders an **offline recovery sheet** you
    move off the box and shred.
 
+The `mcp.json` it writes launches the MCP from **your local
+[Starling-MCP](https://github.com/thedopetoad/Starling-MCP) clone** (`command:
+"node"`, `args: ["…/dist/bin/starling-mcp.js"]`). It can't know where you cloned
+it, so it writes a placeholder path — edit the `args` path to point at your
+clone, **or** set `STARLING_MCP_DIR` (the clone root) before running `init` and
+the wizard fills it in for you. See [pairing](#how-it-pairs-with-starling-mcp).
+
 ## The four things this gets right
 
 1. **Generate** — audited libraries (`@noble/curves`, `@noble/hashes`), platform
@@ -64,7 +70,7 @@ The wizard:
    - **Polymarket / Solana** → fresh **thin** dedicated wallets, profit swept to a
      **treasury** address the agent never holds. These keys are **not**
      withdraw-restricted (no chain primitive for it) — the guardrail is thin float
-     + sweep + the MCP server's per-trade/daily caps. The wizard says so plainly.
+     + sweep + the MCP's per-trade/daily caps. The wizard says so plainly.
 3. **Store** — an encrypted keystore unlocked at boot, **never** a plaintext
    `.env`. See [unlock modes](#unlock-modes).
 4. **No browser exposure** — this is a Node-only package with no Next.js client
@@ -74,7 +80,7 @@ The wizard:
 
 ## Unlock modes
 
-How the MCP server gets the passphrase at boot, set as `STARLING_UNLOCK_MODE`:
+How the MCP gets the passphrase at boot, set as `STARLING_UNLOCK_MODE`:
 
 | mode | where the secret comes from | survives unattended restart? | resists stolen disk? |
 |---|---|---|---|
@@ -102,11 +108,16 @@ the float small and the master/treasury keys off this box.
 ## How it pairs with Starling-MCP
 
 ```
-agent-wallet init                Starling-MCP server boot
+agent-wallet init                the MCP at boot (your Starling-MCP clone)
   └─ writes ~/.starling/   ─────▶  └─ reads ~/.starling/, unlocks via
      keystore/*.json                  STARLING_UNLOCK_MODE, exposes
      config.json, mcp.json            getEvmSigner()/getSolanaSigner()
 ```
+
+The agent host reads the `mcp.json` written here and launches the MCP locally:
+`node /your/clone/Starling-MCP/dist/bin/starling-mcp.js`. Clone Starling-MCP and
+run `npm install` (its `prepare` script builds `dist/`) so that path exists, then
+point the `mcp.json` `args` at it (or set `STARLING_MCP_DIR` before `init`).
 
 Both repos pin the identical `src/keystore/crypto.ts` and a shared decryption
 test vector, so a keystore written here always decrypts there. License: MIT.

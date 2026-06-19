@@ -7,7 +7,7 @@
 
 const VERSION = "1.0.0";
 
-const HELP = `Starling Agent Wallet — create & store keys for the Starling MCP server.
+const HELP = `Starling Agent Wallet — create & store keys for the Starling MCP.
 
 Usage:
   agent-wallet init        Generate + encrypt your agent's keys (interactive)
@@ -27,7 +27,7 @@ init flags:
   --force                  Overwrite existing keystores
 
 Keys live encrypted in ~/.starling/keystore (override with STARLING_DIR).
-The Starling MCP server reads the same keystores to sign. Keys never leave your box.`;
+The Starling MCP reads the same keystores to sign. Keys never leave your box.`;
 
 async function main(): Promise<void> {
   const cmd = process.argv[2];

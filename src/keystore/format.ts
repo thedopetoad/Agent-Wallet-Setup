@@ -1,10 +1,10 @@
 // Starling Keystore v1 — the on-disk contract SHARED with the Starling-MCP
-// server. This file MUST stay byte-compatible across both repos: the wallet
-// tool writes these envelopes, the MCP server reads them. See KEYSTORE_FORMAT.md.
+// codebase. This file MUST stay byte-compatible across both repos: the wallet
+// tool writes these envelopes, the MCP reads them. See KEYSTORE_FORMAT.md.
 
 export const KEYSTORE_VERSION = 1 as const;
 
-/** Which key a keystore holds. The MCP server routes by this. */
+/** Which key a keystore holds. The MCP routes by this. */
 export type Chain = "polygon" | "hyperliquid" | "solana";
 
 export const CHAINS: readonly Chain[] = ["polygon", "hyperliquid", "solana"];
