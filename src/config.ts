@@ -20,8 +20,6 @@ export interface StarlingConfig {
   network: Network;
   signerBackend: SignerBackend;
   unlockMode: UnlockMode;
-  /** per-venue sweep address profits return to (agent never holds this key). */
-  treasury: Partial<Record<Chain, string>>;
   guardrails: {
     perTradeMaxUsd: number;
     dailyNotionalCapUsd: number;
@@ -31,27 +29,48 @@ export interface StarlingConfig {
   wallets: Partial<Record<Chain, string>>; // public addresses only
 }
 
-export async function writeConfig(cfg: StarlingConfig): Promise<string> {
-  const dest = path.join(starlingDir(), "config.json");
+/** Write the (non-secret) config.json next to the bot's mcp.json. */
+export async function writeConfig(cfg: StarlingConfig, dir = process.cwd()): Promise<string> {
+  const dest = path.join(dir, "config.json");
   await fs.writeFile(dest, JSON.stringify(cfg, null, 2), "utf8");
   return dest;
 }
 
-/** Absolute path to the user's local Starling-MCP clone's compiled entrypoint.
- * Resolution order:
+/** Absolute path to the local Starling-MCP clone's compiled entrypoint.
+ * Resolution order (first hit wins — no hand-editing needed in the normal case):
  *   1. STARLING_MCP_PATH env (point it straight at dist/bin/starling-mcp.js)
  *   2. STARLING_MCP_DIR env (the clone root; we append the bin path)
- *   3. a clearly-marked placeholder the user MUST replace by hand.
- * The MCP is run locally — the reader clones Starling-MCP, runs `npm install`
- * (the prepare script builds it), then the agent host launches the compiled bin. */
+ *   3. AUTODETECT: look for a `Starling-MCP` clone sitting next to this repo or
+ *      next to the bot folder (the usual "both repos cloned side by side" layout).
+ *   4. a clearly-marked placeholder (only if nothing above is found).
+ * The MCP runs locally — clone Starling-MCP, `npm install` (its prepare script
+ * builds dist/), then the agent host launches the compiled bin. */
 export const MCP_BIN_REL = "dist/bin/starling-mcp.js";
 const MCP_PATH_PLACEHOLDER = `/ABSOLUTE/PATH/TO/Starling-MCP/${MCP_BIN_REL}`;
 
-export function resolveMcpBinPath(): string {
+/** Candidate clone roots to probe, in order, for an auto-detected Starling-MCP. */
+function mcpProbeDirs(outDir: string): string[] {
+  // This file is dist/config.js at runtime; the repo root is two levels up.
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const repoRoot = path.resolve(here, ".."); // dist/ -> repo root
+  const bases = [outDir, process.cwd(), repoRoot];
+  const dirs: string[] = [];
+  for (const b of bases) {
+    dirs.push(path.join(b, "Starling-MCP")); // a clone INSIDE the folder
+    dirs.push(path.resolve(b, "..", "Starling-MCP")); // a SIBLING clone
+  }
+  return dirs;
+}
+
+export function resolveMcpBinPath(outDir: string = process.cwd()): string {
   const direct = process.env.STARLING_MCP_PATH?.trim();
   if (direct) return direct;
   const dir = process.env.STARLING_MCP_DIR?.trim();
   if (dir) return path.join(dir, MCP_BIN_REL);
+  for (const root of mcpProbeDirs(outDir)) {
+    const candidate = path.join(root, MCP_BIN_REL);
+    if (existsSync(candidate)) return candidate;
+  }
   return MCP_PATH_PLACEHOLDER;
 }
 
@@ -60,27 +79,30 @@ export function mcpBinPathIsPlaceholder(p: string): boolean {
   return p === MCP_PATH_PLACEHOLDER;
 }
 
+/** Plaintext per-chain private keys, in the formats the MCP's env source parses:
+ *  EVM (polygon/hyperliquid) as 0x-hex, Solana as base58 (32- or 64-byte). */
+export type SecretKeys = Partial<Record<Chain, string>>;
+
 /** The exact mcp.json the MCP host (Claude/Cursor/your agent) consumes.
- * Launches the MCP from a LOCAL clone of Starling-MCP — clone it, run
- * `npm install` (the prepare script builds to dist/), then the host runs the
- * compiled bin via Node. Set STARLING_MCP_PATH / STARLING_MCP_DIR before init to
- * have this filled in for you, or edit the `args` path afterward. */
-export function buildMcpJson(cfg: StarlingConfig): string {
+ * The bot's signing keys are injected as PLAINTEXT env vars (STARLING_PK_*) — the
+ * MCP's `env` key source reads them directly, so there's no password, keystore,
+ * or unlock step. `args` is auto-pointed at your local Starling-MCP clone. */
+export function buildMcpJson(cfg: StarlingConfig, keys: SecretKeys, outDir = process.cwd()): string {
+  const env: Record<string, string> = {
+    STARLING_KEY_SOURCE: "env",
+    STARLING_NETWORK: cfg.network,
+  };
+  if (keys.polygon) env.STARLING_PK_POLYGON = keys.polygon;
+  if (keys.hyperliquid) env.STARLING_PK_HYPERLIQUID = keys.hyperliquid;
+  if (keys.solana) env.STARLING_PK_SOLANA = keys.solana;
   return JSON.stringify(
     {
       mcpServers: {
         starling: {
           command: "node",
-          // point this at YOUR clone of Starling-MCP (…/dist/bin/starling-mcp.js)
-          args: [resolveMcpBinPath()],
-          env: {
-            // signing keys come from the encrypted keystore this tool wrote
-            STARLING_KEY_SOURCE: "keystore",
-            STARLING_UNLOCK_MODE: cfg.unlockMode,
-            STARLING_NETWORK: cfg.network,
-            // analytics-only; NEVER on the signing path. Replace before use.
-            STARLING_KEY: "sk_live_REPLACE_ME_analytics_only",
-          },
+          // auto-pointed at your local Starling-MCP clone (…/dist/bin/starling-mcp.js)
+          args: [resolveMcpBinPath(outDir)],
+          env,
         },
       },
     },
@@ -89,14 +111,22 @@ export function buildMcpJson(cfg: StarlingConfig): string {
   );
 }
 
-export async function writeMcpJson(cfg: StarlingConfig, dir = process.cwd()): Promise<string> {
+export async function writeMcpJson(
+  cfg: StarlingConfig,
+  keys: SecretKeys,
+  dir = process.cwd(),
+): Promise<string> {
   const dest = path.join(dir, "mcp.json");
-  await fs.writeFile(dest, buildMcpJson(cfg), "utf8");
+  // mcp.json holds plaintext keys -> lock it down and never let it get committed.
+  await fs.writeFile(dest, buildMcpJson(cfg, keys, dir), { encoding: "utf8", mode: 0o600 });
   return dest;
 }
 
 const IGNORE_BLOCK = `
-# Starling agent wallet — NEVER commit keys, configs, or passphrases
+# Starling agent wallet — NEVER commit these, they contain PRIVATE KEYS
+mcp.json
+WALLETS.txt
+config.json
 /.starling/
 .starling/
 *.keystore.json
@@ -119,60 +149,63 @@ export async function appendIgnore(file: ".gitignore" | ".dockerignore", dir = p
   await fs.writeFile(dest, existing + IGNORE_BLOCK, "utf8");
 }
 
-export interface RecoveryEntry {
+export interface WalletEntry {
   chain: Chain;
+  /** the public address — this is what you FUND. */
   address: string;
-  /** standard-format export material (hex private key / base58 secret). */
+  /** the private key in a standard portable format (0x-hex / base58). BACK UP. */
   secretMaterial: string;
 }
 
+const VENUE_LABEL: Record<Chain, string> = {
+  polygon: "Polygon (Polymarket)",
+  hyperliquid: "Hyperliquid",
+  solana: "Solana (Jupiter)",
+};
+
 /**
- * The recovery sheet is rendered to a FILE the user is told to move offline and
- * shred — never to stdout/scrollback. It carries the portable break-glass
- * material so recovery never depends on Starling existing.
+ * A plain-English wallets file written next to mcp.json. The TOP half (addresses)
+ * is what you fund; the BOTTOM half (private keys) is your offline backup. Same
+ * keys are already in mcp.json so the agent can trade — this file is for YOU.
  */
-export function renderRecoverySheet(entries: RecoveryEntry[], cfg: StarlingConfig): string {
+export function renderWalletsFile(entries: WalletEntry[], cfg: StarlingConfig): string {
   const lines = [
-    "================ STARLING AGENT WALLET — RECOVERY SHEET ================",
+    "================ YOUR BOT'S WALLETS ================",
     "",
-    "!! MOVE THIS FILE OFFLINE AND SHRED IT. Anyone with this can sign trades.",
+    `Network: ${cfg.network}`,
     "",
-    "THREAT MODEL (read this):",
-    "  On an always-on server, anything that can run code as your user can",
-    "  sign trades. The encrypted keystore stops a stolen backup/disk, NOT a",
-    "  live breach. Your REAL protection is that these are thin, trade-not-",
-    "  withdraw (Hyperliquid), expiring wallets — keep the float small and the",
-    "  master / treasury keys OFF this box.",
+    "Your bot has 3 wallets. To give it money to trade, send funds to these",
+    "addresses (this is safe to share — they only RECEIVE):",
     "",
-    `Network: ${cfg.network}    Signer: ${cfg.signerBackend}    Unlock: ${cfg.unlockMode}`,
-    "",
-    "PER-VENUE KEYS (standard portable formats):",
   ];
   for (const e of entries) {
-    lines.push(`  • ${e.chain.padEnd(11)} ${e.address}`);
-    lines.push(`      secret: ${e.secretMaterial}`);
-    const sweep = cfg.treasury[e.chain];
-    if (sweep) lines.push(`      sweeps to treasury: ${sweep}`);
+    lines.push(`  ${VENUE_LABEL[e.chain].padEnd(22)} ${e.address}`);
   }
   lines.push(
     "",
-    "KEYSTORE FILES (encrypted; need your passphrase):",
-    `  ${keystoreDir()}`,
+    "------------------- PRIVATE KEYS (SECRET) -------------------",
     "",
-    "REVOKE / ROTATE:",
-    "  agent-wallet rotate --venue hyperliquid    # fresh agent key, same stable name",
-    "  agent-wallet revoke --venue hyperliquid    # deregister the HL agent",
+    "BACK THESE UP somewhere safe and OFFLINE (a password manager, or written",
+    "on paper). Anyone who gets a key controls that wallet's money. Never email",
+    "them, paste them online, or commit them to git.",
     "",
-    "NOTE: the keystore format is 'Starling Keystore v1' (argon2id + XChaCha20-",
-    "Poly1305) — NOT interoperable with MetaMask/geth. Use `agent-wallet export`",
-    "for a standard wallet file.",
-    "=======================================================================",
+  );
+  for (const e of entries) {
+    lines.push(`  ${VENUE_LABEL[e.chain].padEnd(22)} ${e.secretMaterial}`);
+  }
+  lines.push(
+    "",
+    "These same keys are stored in mcp.json so your agent trades automatically —",
+    "you do NOT need to paste them anywhere. To retire this bot, just move its",
+    "funds out and delete its folder.",
+    "===================================================",
   );
   return lines.join("\n");
 }
 
-export async function writeRecoverySheet(content: string): Promise<string> {
-  const dest = path.join(starlingDir(), "RECOVERY-SHEET.txt");
+/** Write the WALLETS file next to mcp.json, locked down at 0600. */
+export async function writeWalletsFile(content: string, dir = process.cwd()): Promise<string> {
+  const dest = path.join(dir, "WALLETS.txt");
   await fs.writeFile(dest, content, { encoding: "utf8", mode: 0o600 });
   return dest;
 }

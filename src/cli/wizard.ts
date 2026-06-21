@@ -1,51 +1,44 @@
 // src/cli/wizard.ts
-// `agent-wallet init` — generate keys, de-risk per venue, encrypt to the local
-// keystore, and write the integration files. Supports an interactive mode
-// (prompts) and a --non-interactive mode (flags + STARLING_PASSPHRASE env) so it
-// can run in CI / the cross-repo interop test without a TTY.
-import prompts from "prompts";
-import { randomUUID } from "node:crypto";
+// `agent-wallet init` — the one-shot, no-questions setup for a new trading bot.
+//
+// It generates all three wallets (Polygon, Hyperliquid, Solana), points your
+// agent at the MCP, and drops a plain-English WALLETS file telling you which
+// addresses to fund. There are NO prompts and NO password: the keys are written
+// as plaintext env vars into mcp.json, which the MCP reads directly. Everything
+// for one bot lands in a single folder, so making another bot is just `init`
+// again in a different folder.
 import {
   generateEvmKey,
   generateSolanaKey,
   solanaSecretKeyBase58,
 } from "../keygen.js";
-import { encryptKeystore } from "../keystore/crypto.js";
-import { writeKeystore, keystoreExists } from "../keystore/store.js";
 import { CHAINS, type Chain } from "../keystore/format.js";
 import {
   writeConfig,
   writeMcpJson,
   appendIgnore,
-  renderRecoverySheet,
-  writeRecoverySheet,
+  renderWalletsFile,
+  writeWalletsFile,
   resolveMcpBinPath,
   mcpBinPathIsPlaceholder,
   MCP_BIN_REL,
   type StarlingConfig,
-  type RecoveryEntry,
+  type SecretKeys,
+  type WalletEntry,
   type Network,
-  type UnlockMode,
 } from "../config.js";
-import { freeMem } from "../util.js";
 
 const out = (m = "") => process.stdout.write(m + "\n");
 
+// Effectively "no cap" — the MCP still enforces it, but we don't make a
+// non-technical user invent a number. Override with --daily-cap <usd>.
+const DEFAULT_DAILY_CAP_USD = 1_000_000;
+
 interface Flags {
-  nonInteractive: boolean;
   network: Network;
-  venues: Chain[];
-  treasury?: string;
-  treasuryEvm?: string;
-  treasurySol?: string;
-  dailyCap?: number;
-  unlock: UnlockMode;
-  force: boolean;
+  dailyCap: number;
   outDir: string;
-  /** Skip sealing a treasury into the keystore — the withdraw destination is then
-   *  managed entirely by the dashboard-pinned ~/.starling/treasury.json (editable).
-   *  Lets mainnet init proceed without --treasury; --daily-cap is still required. */
-  noSeal: boolean;
+  force: boolean;
 }
 
 function parseFlags(argv: string[]): Flags {
@@ -54,236 +47,94 @@ function parseFlags(argv: string[]): Flags {
     return i >= 0 ? argv[i + 1] : undefined;
   };
   const has = (k: string) => argv.includes(k);
-  const venuesRaw = get("--venues");
-  const venues = (venuesRaw ? venuesRaw.split(",") : CHAINS).filter((v): v is Chain =>
-    (CHAINS as readonly string[]).includes(v),
-  );
+  const capRaw = get("--daily-cap");
   return {
-    nonInteractive: has("--non-interactive") || has("--yes"),
-    network: has("--mainnet") ? "mainnet" : "testnet",
-    venues,
-    treasury: get("--treasury"),
-    treasuryEvm: get("--treasury-evm") ?? get("--treasury"),
-    treasurySol: get("--treasury-sol"),
-    dailyCap: get("--daily-cap") ? Number(get("--daily-cap")) : undefined,
-    unlock: (get("--unlock") as UnlockMode) ?? "keychain",
-    force: has("--force"),
+    // Mainnet is the default. --testnet is the only escape hatch.
+    network: has("--testnet") ? "testnet" : "mainnet",
+    dailyCap: capRaw ? Number(capRaw) : DEFAULT_DAILY_CAP_USD,
     outDir: get("--out") ?? process.cwd(),
-    noSeal: has("--no-seal") || get("--treasury-source") === "dashboard",
+    force: has("--force"),
   };
-}
-
-async function getPassphrase(nonInteractive: boolean): Promise<Buffer> {
-  if (nonInteractive) {
-    const p = process.env.STARLING_PASSPHRASE;
-    if (!p || p.length < 12) {
-      throw new Error(
-        "--non-interactive needs STARLING_PASSPHRASE (≥12 chars) in the environment",
-      );
-    }
-    return Buffer.from(p, "utf8");
-  }
-  const { p1 } = await prompts({
-    type: "password",
-    name: "p1",
-    message: "Keystore passphrase (min 12 chars)",
-  });
-  const { p2 } = await prompts({ type: "password", name: "p2", message: "Confirm passphrase" });
-  if (!p1 || p1.length < 12) throw new Error("passphrase must be at least 12 characters");
-  if (p1 !== p2) throw new Error("passphrases do not match");
-  return Buffer.from(p1, "utf8");
 }
 
 export async function runInit(argv: string[]): Promise<void> {
   const f = parseFlags(argv);
-  const network = f.network;
-  out(
-    `Starling wallet init — network: ${network}${
-      network === "mainnet" ? "  (REAL FUNDS)" : "  (default; pass --mainnet to arm real money)"
-    }`,
-  );
+  const venues = CHAINS as readonly Chain[]; // always all three
 
-  // venue selection
-  let venues = f.venues;
-  if (!f.nonInteractive) {
-    const r = await prompts({
-      type: "multiselect",
-      name: "venues",
-      message: "Select venues",
-      choices: [
-        { title: "Polymarket (Polygon)", value: "polygon", selected: true },
-        { title: "Hyperliquid", value: "hyperliquid", selected: true },
-        { title: "Solana (Jupiter)", value: "solana", selected: true },
-      ],
-      min: 1,
-    });
-    venues = (r.venues as Chain[]) ?? [];
-  }
-  if (venues.length === 0) throw new Error("no venues selected");
+  out(`Creating a new Starling bot — network: ${f.network}${f.network === "mainnet" ? "  (REAL FUNDS)" : ""}`);
+  out("");
 
-  // refuse to clobber unless --force
-  for (const v of venues) {
-    if (!f.force && (await keystoreExists(v))) {
-      throw new Error(
-        `${v}.keystore.json already exists. Use 'rotate' to re-key, or pass --force to overwrite.`,
-      );
-    }
-  }
-
-  // mainnet safety gate — the de-risking floor cannot be skipped.
-  // Two treasury models on mainnet:
-  //   sealed (default): a treasury address is AAD-bound into the keystore here.
-  //   --no-seal:        no treasury is sealed; the withdraw destination is managed
-  //                     by the editable dashboard file (~/.starling/treasury.json).
-  // Either way the --daily-cap floor is mandatory.
-  let treasury = f.treasury;
-  let dailyCap = f.dailyCap;
-  if (network === "mainnet") {
-    if (f.noSeal) {
-      out(
-        "  treasury    -> DASHBOARD-MANAGED (no seal). Set/edit your withdraw address in\n" +
-          "                the Starling dashboard (writes ~/.starling/treasury.json). Until you\n" +
-          "                do, withdraws are refused fail-closed. (editable, sealed=false)",
-      );
-    }
-    if (!f.nonInteractive) {
-      if (!treasury && !f.noSeal) {
-        const r = await prompts({
-          type: "text",
-          name: "t",
-          message: "Treasury sweep address (required for mainnet)",
-        });
-        treasury = (r.t ?? "").trim();
-      }
-      if (!dailyCap) {
-        const r = await prompts({
-          type: "number",
-          name: "c",
-          message: "Daily notional cap in USD (must be > 0)",
-        });
-        dailyCap = Number(r.c);
-      }
-    }
-    if (!treasury && !f.noSeal) {
-      throw new Error("--mainnet requires a treasury sweep address (or pass --no-seal for a dashboard-managed one)");
-    }
-    if (!dailyCap || dailyCap <= 0) {
-      throw new Error("--mainnet requires a non-zero --daily-cap (the de-risking floor)");
-    }
-  }
-
-  const pass = await getPassphrase(f.nonInteractive);
-  const lowRam = freeMem() < 256 * 1024 * 1024; // <256MiB free → use KDF floor
-  // Per-chain treasury sealed into each keystore (EVM addr for polygon/HL, base58
-  // for solana). The interactive mainnet gate above sets `treasury` (EVM).
-  // --no-seal => seal nothing; the dashboard file is the (editable) destination.
-  const treasuryEvm = f.noSeal ? undefined : (f.treasuryEvm ?? treasury);
-  const treasurySol = f.noSeal ? undefined : f.treasurySol;
+  // Generate one fresh wallet per venue. EVM keys (Polygon/Hyperliquid) are
+  // secp256k1; Solana is ed25519. The Hyperliquid wallet is its OWN account —
+  // fund it and it trades, no separate approval step.
+  const keys: SecretKeys = {};
   const wallets: Partial<Record<Chain, string>> = {};
-  const recovery: RecoveryEntry[] = [];
+  const entries: WalletEntry[] = [];
 
-  try {
-    for (const chain of venues) {
-      if (chain === "solana") {
-        const k = generateSolanaKey();
-        const { keystore, loweredKdf } = encryptKeystore(
-          k.seed,
-          pass,
-          "solana",
-          k.pubkeyBase58,
-          randomUUID(),
-          { lowRam, treasury: treasurySol },
-        );
-        if (loweredKdf) out("  ! low-RAM: KDF at OWASP minimum — use a longer passphrase");
-        recovery.push({
-          chain: "solana",
-          address: k.pubkeyBase58,
-          secretMaterial: solanaSecretKeyBase58(k.seed),
-        });
-        wallets.solana = k.pubkeyBase58;
-        k.seed.fill(0);
-        out(`  solana      -> ${await writeKeystore(keystore)}  (${k.pubkeyBase58})`);
-      } else {
-        const k = generateEvmKey();
-        const { keystore, loweredKdf } = encryptKeystore(
-          k.secret,
-          pass,
-          chain,
-          k.address,
-          randomUUID(),
-          { lowRam, treasury: treasuryEvm },
-        );
-        if (loweredKdf) out("  ! low-RAM: KDF at OWASP minimum — use a longer passphrase");
-        recovery.push({
-          chain,
-          address: k.address,
-          secretMaterial: `0x${Buffer.from(k.secret).toString("hex")}`,
-        });
-        wallets[chain] = k.address;
-        k.secret.fill(0);
-        out(`  ${chain.padEnd(11)} -> ${await writeKeystore(keystore)}  (${k.address})`);
-        if (chain === "hyperliquid") {
-          out(
-            "  HL: your MASTER account must now sign ONE approveAgent for this agent\n" +
-              `      address (stable name "starling-agent", 30-day expiry). The agent key is\n` +
-              "      trade-not-withdraw. Run: agent-wallet approve-hl  (needs @nktkas/hyperliquid)",
-          );
-        }
-      }
+  for (const chain of venues) {
+    if (chain === "solana") {
+      const k = generateSolanaKey();
+      const secret = solanaSecretKeyBase58(k.seed); // base58 64-byte (Phantom format)
+      k.seed.fill(0);
+      keys.solana = secret;
+      wallets.solana = k.pubkeyBase58;
+      entries.push({ chain, address: k.pubkeyBase58, secretMaterial: secret });
+      out(`  solana       ${k.pubkeyBase58}`);
+    } else {
+      const k = generateEvmKey();
+      const secret = `0x${Buffer.from(k.secret).toString("hex")}`;
+      k.secret.fill(0);
+      keys[chain] = secret;
+      wallets[chain] = k.address;
+      entries.push({ chain, address: k.address, secretMaterial: secret });
+      out(`  ${chain.padEnd(12)} ${k.address}`);
     }
-  } finally {
-    pass.fill(0); // best-effort
   }
 
-  // non-secret integration files
   const cfg: StarlingConfig = {
     version: 1,
-    network,
+    network: f.network,
     signerBackend: "local",
-    unlockMode: f.unlock,
-    treasury: Object.fromEntries(
-      venues
-        .map((v) => [v, v === "solana" ? treasurySol : treasuryEvm] as const)
-        .filter(([, a]) => !!a),
-    ),
+    unlockMode: "env",
     guardrails: {
       perTradeMaxUsd: 0,
-      dailyNotionalCapUsd: dailyCap ?? 0,
+      dailyNotionalCapUsd: f.dailyCap,
       allowlist: [],
       killSwitch: false,
     },
     wallets,
   };
-  const cfgPath = await writeConfig(cfg);
-  const mcpPath = await writeMcpJson(cfg, f.outDir);
+
+  // Everything for this bot goes in one folder (outDir): mcp.json (keys live
+  // here), config.json, WALLETS.txt, and the ignore guards.
+  const mcpPath = await writeMcpJson(cfg, keys, f.outDir);
+  const cfgPath = await writeConfig(cfg, f.outDir);
+  const walletsPath = await writeWalletsFile(renderWalletsFile(entries, cfg), f.outDir);
   await appendIgnore(".gitignore", f.outDir);
   await appendIgnore(".dockerignore", f.outDir);
-  const sheetPath = await writeRecoverySheet(renderRecoverySheet(recovery, cfg));
 
   out("");
-  out(`  config       -> ${cfgPath}`);
-  out(`  mcp.json     -> ${mcpPath}`);
-  out(`  recovery     -> ${sheetPath}   (MOVE OFFLINE AND SHRED)`);
+  out(`  mcp.json     -> ${mcpPath}   (point your agent here)`);
+  out(`  WALLETS.txt  -> ${walletsPath}   (fund these addresses + back up the keys)`);
+  out(`  config.json  -> ${cfgPath}`);
   out("");
 
-  // mcp.json launches the MCP from a LOCAL Starling-MCP clone. Tell the user to
-  // point the `args` path at wherever they cloned it (clone -> npm install builds
-  // dist/ via the prepare script -> the host runs dist/bin/starling-mcp.js).
-  const mcpBin = resolveMcpBinPath();
+  const mcpBin = resolveMcpBinPath(f.outDir);
   if (mcpBinPathIsPlaceholder(mcpBin)) {
     out(
-      "  ! mcp.json points at a PLACEHOLDER path. Clone github.com/thedopetoad/Starling-MCP,\n" +
-        "    run `npm install` (its prepare script builds dist/), then edit mcp.json's\n" +
-        `    "args" to YOUR clone path, e.g. /home/you/Starling-MCP/${MCP_BIN_REL}.\n` +
-        "    (Or re-run init with STARLING_MCP_DIR set to the clone root to fill it in.)",
+      "  ! Couldn't auto-find your Starling-MCP clone, so mcp.json has a placeholder path.\n" +
+        "    Clone github.com/thedopetoad/Starling-MCP next to this folder and run\n" +
+        `    \`npm install\` in it, then re-run init — or set STARLING_MCP_DIR to the clone\n` +
+        `    root. (Manual fix: edit mcp.json's "args" to YOUR clone's ${MCP_BIN_REL}.)`,
     );
+    out("");
   } else {
-    out(`  mcp.json launches the MCP from your local clone: ${mcpBin}`);
+    out(`  MCP auto-detected at: ${mcpBin}`);
+    out("");
   }
-  out("");
-  out(
-    network === "mainnet"
-      ? "Mainnet armed. Point your agent at mcp.json and start the MCP from your Starling-MCP clone."
-      : "Testnet ready. Verify with the MCP (your Starling-MCP clone), then re-run with --mainnet to arm real money.",
-  );
+
+  out("Done. Next:");
+  out("  1. Open WALLETS.txt and send funds to the 3 addresses to give your bot money.");
+  out("  2. Back up WALLETS.txt somewhere safe and offline (it has the private keys).");
+  out("  3. Point your agent host at mcp.json and start trading.");
 }

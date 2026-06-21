@@ -1,36 +1,32 @@
 #!/usr/bin/env node
 // src/bin/agent-wallet.ts — the single CLI entrypoint.
-//   agent-wallet init [--mainnet] [--venues a,b] [--non-interactive] [--unlock m]
+//   agent-wallet init [--out <dir>] [--daily-cap <usd>] [--testnet]
 //   agent-wallet doctor
-//   agent-wallet export --venue <chain>
 //   agent-wallet --version | --help
 
-const VERSION = "1.0.0";
+const VERSION = "2.0.0";
 
-const HELP = `Starling Agent Wallet — create & store keys for the Starling MCP.
+const HELP = `Starling Agent Wallet — create a trading bot's wallets for the Starling MCP.
 
 Usage:
-  agent-wallet init        Generate + encrypt your agent's keys (interactive)
-  agent-wallet import      Encrypt a private key you ALREADY have (--venue <chain>)
-  agent-wallet doctor      Preflight + hygiene checks
-  agent-wallet export      Print a key in a standard portable format
-  agent-wallet unlock      Store the passphrase in the OS keychain (desktop)
+  agent-wallet init        Create a new bot: 3 wallets, mcp.json, WALLETS.txt
+  agent-wallet doctor      Quick environment + hygiene check
   agent-wallet --version
   agent-wallet --help
 
-init flags:
-  --mainnet                Arm real funds (requires --treasury + --daily-cap)
-  --no-seal                Mainnet without sealing a treasury — the withdraw
-                           destination is managed by the editable dashboard file
-                           (~/.starling/treasury.json). Still requires --daily-cap.
-  --venues a,b,c           polygon,hyperliquid,solana (default: all)
-  --unlock <mode>          keychain|env|tpm|kms|file (default: keychain)
-  --non-interactive        Read passphrase from STARLING_PASSPHRASE env
-  --out <dir>              Where to write mcp.json/.gitignore (default: cwd)
-  --force                  Overwrite existing keystores
+init creates all three wallets (Polygon, Hyperliquid, Solana) on mainnet, with
+NO prompts and NO password. The private keys are written into mcp.json (which
+your agent reads) and into a plain-English WALLETS.txt telling you which
+addresses to fund. Everything lands in one folder — run init in a new folder to
+make another bot.
 
-Keys live encrypted in ~/.starling/keystore (override with STARLING_DIR).
-The Starling MCP reads the same keystores to sign. Keys never leave your box.`;
+init flags:
+  --out <dir>              Folder to create the bot in (default: current folder)
+  --daily-cap <usd>        Daily notional cap the MCP enforces (default: 1,000,000)
+  --testnet                Use testnet instead of mainnet (default: mainnet)
+
+The keys live as plaintext env vars in mcp.json — keep that file private (it's
+gitignored for you). Keys are generated on your machine and never leave it.`;
 
 async function main(): Promise<void> {
   const cmd = process.argv[2];
@@ -40,12 +36,6 @@ async function main(): Promise<void> {
       return (await import("../cli/wizard.js")).runInit(rest);
     case "doctor":
       return (await import("../cli/doctor.js")).run();
-    case "export":
-      return (await import("../cli/export.js")).run(rest);
-    case "import":
-      return (await import("../cli/import.js")).run(rest);
-    case "unlock":
-      return (await import("../cli/unlock.js")).run(rest);
     case "--version":
     case "-v":
       process.stdout.write(VERSION + "\n");

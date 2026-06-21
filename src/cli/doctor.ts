@@ -1,11 +1,9 @@
 // src/cli/doctor.ts
-// `agent-wallet doctor` — preflight + hygiene checks. Prints a PASS/WARN/FAIL
-// report and exits non-zero if anything is FAIL.
+// `agent-wallet doctor` — quick environment + hygiene checks. Prints a
+// PASS/WARN/FAIL report and exits non-zero if anything is FAIL.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-import { starlingDir, keystoreDir } from "../keystore/store.js";
-import { CHAINS } from "../keystore/format.js";
 
 type Level = "PASS" | "WARN" | "FAIL";
 const isWin = process.platform === "win32";
@@ -19,7 +17,7 @@ export async function run(): Promise<void> {
   let fail = 0;
   process.stdout.write("agent-wallet doctor\n");
 
-  // Node version
+  // Node version (MCP hosts don't bundle Node — the user must have it on PATH).
   const major = Number(process.versions.node.split(".")[0]);
   if (major >= 20) line("PASS", `Node ${process.versions.node}`);
   else {
@@ -27,7 +25,7 @@ export async function run(): Promise<void> {
     fail++;
   }
 
-  // CSPRNG sanity
+  // CSPRNG sanity — key generation depends on this.
   try {
     const a = randomBytes(32);
     const b = randomBytes(32);
@@ -41,34 +39,39 @@ export async function run(): Promise<void> {
     fail++;
   }
 
-  // ~/.starling perms
+  // A bot folder in the cwd? Check mcp.json holds keys and is gitignored.
+  const mcpPath = path.join(process.cwd(), "mcp.json");
   try {
-    const st = await fs.stat(starlingDir());
-    if (!isWin && (st.mode & 0o077) !== 0) {
-      line("FAIL", `${starlingDir()} is group/world-accessible (chmod 700)`);
-      fail++;
-    } else line("PASS", `${starlingDir()} present`);
-  } catch {
-    line("WARN", `${starlingDir()} not found — run 'agent-wallet init'`);
-  }
+    const raw = await fs.readFile(mcpPath, "utf8");
+    const hasKeys = /STARLING_PK_/.test(raw);
+    if (hasKeys) line("PASS", "mcp.json present with bot keys");
+    else line("WARN", "mcp.json present but has no STARLING_PK_* keys — re-run 'agent-wallet init'");
 
-  // keystore file perms
-  for (const chain of CHAINS) {
-    const p = path.join(keystoreDir(), `${chain}.keystore.json`);
+    // mcp.json/WALLETS.txt carry plaintext keys — make sure git won't grab them.
+    let ignored = false;
     try {
-      const st = await fs.stat(p);
-      if (!isWin && (st.mode & 0o077) !== 0) {
-        line("FAIL", `${chain}.keystore.json is group/world-readable (chmod 600)`);
-        fail++;
-      } else {
-        line("PASS", `${chain}.keystore.json ${isWin ? "present" : `mode ${(st.mode & 0o777).toString(8)}`}`);
-      }
+      const gi = await fs.readFile(path.join(process.cwd(), ".gitignore"), "utf8");
+      ignored = /(^|\n)\s*mcp\.json\s*(\n|$)/.test(gi);
     } catch {
-      /* not all venues configured; fine */
+      /* no .gitignore */
     }
+    if (ignored) line("PASS", "mcp.json is gitignored");
+    else {
+      line("FAIL", "mcp.json holds private keys but is NOT gitignored — add it to .gitignore");
+      fail++;
+    }
+
+    if (!isWin) {
+      const st = await fs.stat(mcpPath);
+      if ((st.mode & 0o077) !== 0) {
+        line("WARN", "mcp.json is group/world-readable — chmod 600 it (it has private keys)");
+      } else line("PASS", "mcp.json is owner-only (mode 600)");
+    }
+  } catch {
+    line("WARN", "no mcp.json in this folder — run 'agent-wallet init' to create a bot here");
   }
 
-  // NEXT_PUBLIC_ key/secret leak check (the Next.js footgun)
+  // NEXT_PUBLIC_ key/secret leak check (the Next.js footgun — inlined into client JS).
   const leaky = Object.keys(process.env).filter((k) =>
     /^NEXT_PUBLIC_.*(KEY|SECRET|MNEMONIC|PRIV|PASSPHRASE)/i.test(k),
   );
@@ -77,17 +80,6 @@ export async function run(): Promise<void> {
     fail++;
   } else line("PASS", "no NEXT_PUBLIC_*KEY/SECRET/PASSPHRASE in env");
 
-  // mainnet + plaintext passphrase file co-location
-  if ((process.env.STARLING_NETWORK ?? "testnet") === "mainnet" && process.env.STARLING_PASSPHRASE_FILE) {
-    const pf = path.resolve(process.env.STARLING_PASSPHRASE_FILE);
-    if (pf.startsWith(path.resolve(starlingDir()))) {
-      line("FAIL", "plaintext passphrase file sits inside ~/.starling on mainnet — co-located plaintext defeats at-rest encryption");
-      fail++;
-    } else {
-      line("WARN", "mainnet using a plaintext passphrase file — prefer --unlock tpm|kms");
-    }
-  }
-
-  process.stdout.write(fail ? `\n${fail} FAIL — fix before arming real money.\n` : "\nAll checks passed.\n");
+  process.stdout.write(fail ? `\n${fail} FAIL — fix before funding the bot.\n` : "\nAll checks passed.\n");
   if (fail) process.exitCode = 1;
 }
