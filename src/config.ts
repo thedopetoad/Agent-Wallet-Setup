@@ -1,10 +1,11 @@
 // src/config.ts
 // Integration files the streamlined `init` writes for a bot: the Starling
-// config, the MCP host config (mcp.json), ignore-file guards, and a plain-English
-// WALLETS file. In the env-key model the bot's PRIVATE KEYS live in mcp.json's
-// `env` block (plaintext) and in WALLETS.txt — both are gitignored, never commit
-// them. Everything for one bot lands in a single folder so a second bot can't
-// clobber the first.
+// config, a .env holding the signing keys, the MCP host config (mcp.json), the
+// ignore-file guards, and a plain-English WALLETS file. In the env-key model the
+// bot's PRIVATE KEYS live in a plaintext .env (which mcp.json loads via
+// `node --env-file`) and are mirrored in WALLETS.txt as an offline backup — both
+// are gitignored, never commit them. Everything for one bot lands in a single
+// folder so a second bot can't clobber the first.
 import { promises as fs } from "node:fs";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -83,26 +84,55 @@ export function mcpBinPathIsPlaceholder(p: string): boolean {
  *  EVM (polygon/hyperliquid) as 0x-hex, Solana as base58 (32- or 64-byte). */
 export type SecretKeys = Partial<Record<Chain, string>>;
 
+/** Absolute path to the bot's .env (the file that holds the signing keys). */
+export function envFilePath(outDir = process.cwd()): string {
+  return path.resolve(outDir, ".env");
+}
+
+/** The .env the bot's keys live in. The MCP's `env` key source reads these; the
+ * generated mcp.json loads this file via `node --env-file`, and you can run the
+ * MCP (or your own bot) directly the same way:
+ *   node --env-file=.env <Starling-MCP>/dist/bin/starling-mcp.js
+ * Plain KEY=value lines, no `export` — the Node --env-file / dotenv format. EVM
+ * keys are 0x-hex and Solana is base58, so no value needs quoting. */
+export function buildEnvFile(cfg: StarlingConfig, keys: SecretKeys): string {
+  const lines = [
+    "# Starling bot — PRIVATE KEYS. Gitignored; never commit, paste, or share this file.",
+    "# Loaded by mcp.json via `node --env-file=.env`; the MCP's env key source reads these.",
+    "",
+    "STARLING_KEY_SOURCE=env",
+    `STARLING_NETWORK=${cfg.network}`,
+  ];
+  if (keys.polygon) lines.push(`STARLING_PK_POLYGON=${keys.polygon}`);
+  if (keys.hyperliquid) lines.push(`STARLING_PK_HYPERLIQUID=${keys.hyperliquid}`);
+  if (keys.solana) lines.push(`STARLING_PK_SOLANA=${keys.solana}`);
+  return lines.join("\n") + "\n";
+}
+
+/** Write the bot's .env (signing keys) at 0600. */
+export async function writeEnvFile(content: string, dir = process.cwd()): Promise<string> {
+  const dest = path.join(dir, ".env");
+  await fs.writeFile(dest, content, { encoding: "utf8", mode: 0o600 });
+  return dest;
+}
+
 /** The exact mcp.json the MCP host (Claude/Cursor/your agent) consumes.
- * The bot's signing keys are injected as PLAINTEXT env vars (STARLING_PK_*) — the
- * MCP's `env` key source reads them directly, so there's no password, keystore,
- * or unlock step. `args` is auto-pointed at your local Starling-MCP clone. */
-export function buildMcpJson(cfg: StarlingConfig, keys: SecretKeys, outDir = process.cwd()): string {
-  const env: Record<string, string> = {
-    STARLING_KEY_SOURCE: "env",
-    STARLING_NETWORK: cfg.network,
-  };
-  if (keys.polygon) env.STARLING_PK_POLYGON = keys.polygon;
-  if (keys.hyperliquid) env.STARLING_PK_HYPERLIQUID = keys.hyperliquid;
-  if (keys.solana) env.STARLING_PK_SOLANA = keys.solana;
+ * The bot's signing keys are NOT inlined here — they live in the sibling .env,
+ * which we load with `node --env-file=<abs>/.env` so the MCP's `env` key source
+ * picks them up. `args` is auto-pointed at your local Starling-MCP clone; the
+ * (non-secret) env block keeps the key source + network self-documenting. */
+export function buildMcpJson(cfg: StarlingConfig, outDir = process.cwd()): string {
   return JSON.stringify(
     {
       mcpServers: {
         starling: {
           command: "node",
-          // auto-pointed at your local Starling-MCP clone (…/dist/bin/starling-mcp.js)
-          args: [resolveMcpBinPath(outDir)],
-          env,
+          // load the bot's keys from .env, then run your local Starling-MCP clone
+          args: [`--env-file=${envFilePath(outDir)}`, resolveMcpBinPath(outDir)],
+          env: {
+            STARLING_KEY_SOURCE: "env",
+            STARLING_NETWORK: cfg.network,
+          },
         },
       },
     },
@@ -111,14 +141,11 @@ export function buildMcpJson(cfg: StarlingConfig, keys: SecretKeys, outDir = pro
   );
 }
 
-export async function writeMcpJson(
-  cfg: StarlingConfig,
-  keys: SecretKeys,
-  dir = process.cwd(),
-): Promise<string> {
+export async function writeMcpJson(cfg: StarlingConfig, dir = process.cwd()): Promise<string> {
   const dest = path.join(dir, "mcp.json");
-  // mcp.json holds plaintext keys -> lock it down and never let it get committed.
-  await fs.writeFile(dest, buildMcpJson(cfg, keys, dir), { encoding: "utf8", mode: 0o600 });
+  // No secrets in mcp.json now (keys live in .env), but it carries machine-local
+  // paths — keep it gitignored and 0600 like the rest of the bot folder.
+  await fs.writeFile(dest, buildMcpJson(cfg, dir), { encoding: "utf8", mode: 0o600 });
   return dest;
 }
 
@@ -166,7 +193,7 @@ const VENUE_LABEL: Record<Chain, string> = {
 /**
  * A plain-English wallets file written next to mcp.json. The TOP half (addresses)
  * is what you fund; the BOTTOM half (private keys) is your offline backup. Same
- * keys are already in mcp.json so the agent can trade — this file is for YOU.
+ * keys are already in the bot's .env so the agent can trade — this file is for YOU.
  */
 export function renderWalletsFile(entries: WalletEntry[], cfg: StarlingConfig): string {
   const lines = [
@@ -195,9 +222,9 @@ export function renderWalletsFile(entries: WalletEntry[], cfg: StarlingConfig): 
   }
   lines.push(
     "",
-    "These same keys are stored in mcp.json so your agent trades automatically —",
-    "you do NOT need to paste them anywhere. To retire this bot, just move its",
-    "funds out and delete its folder.",
+    "These same keys are stored in the bot's .env (which mcp.json loads) so your",
+    "agent trades automatically — you do NOT need to paste them anywhere. To retire",
+    "this bot, just move its funds out and delete its folder.",
     "===================================================",
   );
   return lines.join("\n");

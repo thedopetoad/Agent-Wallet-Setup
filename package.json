@@ -1,9 +1,9 @@
 {
   "name": "@starling/agent-wallet",
   "version": "2.0.0",
-  "description": "Make a trading bot's wallets in one command for the Starling MCP. `init` generates all three wallets (Polygon, Hyperliquid, Solana), writes mcp.json + a plain-English WALLETS file, and needs no prompts or password. Keys never leave your box.",
+  "description": "Make a trading bot's wallets in one command for the Starling MCP. `init` generates all three wallets (Polygon, Hyperliquid, Solana), writes their keys to a .env, wires up mcp.json (which loads that .env) + a plain-English WALLETS file, and needs no prompts or password. Keys never leave your box.",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": { "node": ">=20.6" },
   "bin": {
     "agent-wallet": "dist/bin/agent-wallet.js"
   },

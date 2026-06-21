@@ -4,16 +4,17 @@
 [Starling MCP](https://github.com/thedopetoad/Starling-MCP).**
 
 `agent-wallet init` generates the three wallets a bot needs (Polygon, Hyperliquid,
-Solana), wires them into an `mcp.json` your agent reads, and writes a plain-English
-`WALLETS.txt` telling you which addresses to fund. **No prompts, no password,
-nothing to configure.** Keys are generated on your machine and never leave it.
+Solana), writes their keys to a `.env`, wires up an `mcp.json` your agent reads
+(which loads that `.env`), and writes a plain-English `WALLETS.txt` telling you
+which addresses to fund. **No prompts, no password, nothing to configure.** Keys
+are generated on your machine and never leave it.
 
 > **Want another bot?** Run `init` again in a different folder. Each bot is
 > self-contained in its own folder — a second bot never touches the first.
 
-> **Prerequisite:** Node 20+ on your `PATH`. (MCP hosts like Claude Desktop and
-> Cursor do **not** bundle Node — run `node -v` to confirm. `agent-wallet doctor`
-> checks this for you.)
+> **Prerequisite:** Node 20.6+ on your `PATH` — the `--env-file` flag that mcp.json
+> uses landed in Node 20.6. (MCP hosts like Claude Desktop and Cursor do **not**
+> bundle Node — run `node -v` to confirm. `agent-wallet doctor` checks this for you.)
 
 ## Quick start
 
@@ -30,12 +31,13 @@ mkdir ../my-bot && cd ../my-bot
 node ../Agent-Wallet-Setup/dist/bin/agent-wallet.js init
 ```
 
-That's it. `init` prints the three wallet addresses and writes three files into
+That's it. `init` prints the three wallet addresses and writes four files into
 the current folder:
 
 | file | what it is |
 |---|---|
-| `mcp.json` | point your agent host (Claude Desktop / Cursor) at this — it has the keys baked in |
+| `.env` | your bot's **private keys** (`STARLING_PK_*`) — gitignored; `mcp.json` loads it |
+| `mcp.json` | point your agent host (Claude Desktop / Cursor) at this — it loads the keys from `.env` |
 | `WALLETS.txt` | the addresses to **fund**, and the private keys to **back up** (keep it offline) |
 | `config.json` | non-secret summary (network, addresses, daily cap) |
 
@@ -48,12 +50,14 @@ Then: **(1)** send funds to the three addresses in `WALLETS.txt`, **(2)** back u
    for Solana, all from the platform CSPRNG (`node:crypto.randomBytes`), in-process.
 2. **Mainnet by default** (pass `--testnet` to use a test network instead).
 3. **Writes the keys as plaintext env vars** (`STARLING_PK_POLYGON` /
-   `_HYPERLIQUID` / `_SOLANA`) into `mcp.json`. The Starling MCP's `env` key source
-   reads them directly — so there is no keystore, no passphrase, and no unlock step.
+   `_HYPERLIQUID` / `_SOLANA`) into a `.env` file, and points `mcp.json` at it via
+   `node --env-file=.env`. The Starling MCP's `env` key source reads them directly —
+   so there is no keystore, no passphrase, and no unlock step. (You can launch the
+   MCP yourself the same way: `node --env-file=.env <Starling-MCP>/dist/bin/starling-mcp.js`.)
 4. **Auto-finds your Starling-MCP clone** (a sibling `../Starling-MCP` or one
    inside the folder) and points `mcp.json` at it. Set `STARLING_MCP_DIR` to
    override.
-5. **Guards your keys from git** — appends `mcp.json`, `WALLETS.txt`, and
+5. **Guards your keys from git** — appends `.env`, `mcp.json`, `WALLETS.txt`, and
    `config.json` to `.gitignore`/`.dockerignore`, and writes the key files `0600`.
 
 ### A note on Hyperliquid
@@ -65,7 +69,7 @@ There is no separate "approve this agent" step to do.
 
 | command | does |
 |---|---|
-| `agent-wallet init` | create a bot: 3 wallets, `mcp.json`, `WALLETS.txt`, `config.json` |
+| `agent-wallet init` | create a bot: 3 wallets, `.env`, `mcp.json`, `WALLETS.txt`, `config.json` |
 | `agent-wallet doctor` | quick environment + hygiene check (Node, CSPRNG, keys gitignored) |
 
 ### `init` flags
@@ -78,12 +82,12 @@ There is no separate "approve this agent" step to do.
 
 ## Security — read this
 
-The keys are stored **in plaintext** in `mcp.json` and `WALLETS.txt`. This is the
-easy path, and it means anything that can read those files (or this machine's
-environment) can sign trades. So:
+The keys are stored **in plaintext** in `.env` (and mirrored in `WALLETS.txt`).
+This is the easy path, and it means anything that can read those files (or this
+machine's environment) can sign trades. So:
 
 - **Keep the float small.** These are hot wallets. Only fund what the bot needs.
-- **Never commit or share `mcp.json` / `WALLETS.txt`.** They're gitignored for you
+- **Never commit or share `.env` / `WALLETS.txt`.** They're gitignored for you
   — keep them that way, and keep `WALLETS.txt` backed up offline.
 - **To retire a bot,** move its funds out and delete its folder.
 
@@ -91,11 +95,13 @@ environment) can sign trades. So:
 
 ```
 agent-wallet init                 the MCP at boot (your Starling-MCP clone)
-  └─ writes ./mcp.json     ─────▶   └─ reads STARLING_PK_* from its env,
-     (keys in env block)               signs with the env key source
+  ├─ writes ./.env         ─────▶   └─ reads STARLING_PK_* from its env,
+  └─ writes ./mcp.json                 signs with the env key source
+     (loads .env via --env-file)
 ```
 
-The agent host reads `mcp.json` and launches the MCP locally with the keys in its
-environment (`STARLING_KEY_SOURCE=env`). Clone Starling-MCP next to this repo and
-run `npm install` (its `prepare` script builds `dist/`) so the auto-detected path
-exists. License: MIT.
+The agent host reads `mcp.json` and launches the MCP locally with `node
+--env-file=.env`, so the keys from `.env` land in its environment
+(`STARLING_KEY_SOURCE=env`). Clone Starling-MCP next to this repo and run `npm
+install` (its `prepare` script builds `dist/`) so the auto-detected path exists.
+License: MIT.

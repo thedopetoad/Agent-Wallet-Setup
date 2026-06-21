@@ -18,10 +18,11 @@ export async function run(): Promise<void> {
   process.stdout.write("agent-wallet doctor\n");
 
   // Node version (MCP hosts don't bundle Node — the user must have it on PATH).
-  const major = Number(process.versions.node.split(".")[0]);
-  if (major >= 20) line("PASS", `Node ${process.versions.node}`);
+  // mcp.json launches the MCP with `node --env-file=.env`, which needs Node ≥20.6.
+  const [major, minor] = process.versions.node.split(".").map(Number);
+  if (major > 20 || (major === 20 && minor >= 6)) line("PASS", `Node ${process.versions.node}`);
   else {
-    line("FAIL", `Node ${process.versions.node} — need ≥20`);
+    line("FAIL", `Node ${process.versions.node} — need ≥20.6 (for --env-file)`);
     fail++;
   }
 
@@ -39,36 +40,51 @@ export async function run(): Promise<void> {
     fail++;
   }
 
-  // A bot folder in the cwd? Check mcp.json holds keys and is gitignored.
+  // A bot folder in the cwd? The keys live in .env now (mcp.json loads it via
+  // --env-file). Check the .env holds keys and is gitignored, and that mcp.json
+  // points at it.
+  const envPath = path.join(process.cwd(), ".env");
   const mcpPath = path.join(process.cwd(), "mcp.json");
+  let envExists = false;
   try {
-    const raw = await fs.readFile(mcpPath, "utf8");
-    const hasKeys = /STARLING_PK_/.test(raw);
-    if (hasKeys) line("PASS", "mcp.json present with bot keys");
-    else line("WARN", "mcp.json present but has no STARLING_PK_* keys — re-run 'agent-wallet init'");
+    const raw = await fs.readFile(envPath, "utf8");
+    envExists = true;
+    if (/STARLING_PK_/.test(raw)) line("PASS", ".env present with bot keys");
+    else line("WARN", ".env present but has no STARLING_PK_* keys — re-run 'agent-wallet init'");
 
-    // mcp.json/WALLETS.txt carry plaintext keys — make sure git won't grab them.
+    // .env carries plaintext keys — make sure git won't grab it.
     let ignored = false;
     try {
       const gi = await fs.readFile(path.join(process.cwd(), ".gitignore"), "utf8");
-      ignored = /(^|\n)\s*mcp\.json\s*(\n|$)/.test(gi);
+      ignored = /(^|\n)\s*\.env\s*(\n|$)/.test(gi);
     } catch {
       /* no .gitignore */
     }
-    if (ignored) line("PASS", "mcp.json is gitignored");
+    if (ignored) line("PASS", ".env is gitignored");
     else {
-      line("FAIL", "mcp.json holds private keys but is NOT gitignored — add it to .gitignore");
+      line("FAIL", ".env holds private keys but is NOT gitignored — add it to .gitignore");
       fail++;
     }
 
     if (!isWin) {
-      const st = await fs.stat(mcpPath);
+      const st = await fs.stat(envPath);
       if ((st.mode & 0o077) !== 0) {
-        line("WARN", "mcp.json is group/world-readable — chmod 600 it (it has private keys)");
-      } else line("PASS", "mcp.json is owner-only (mode 600)");
+        line("WARN", ".env is group/world-readable — chmod 600 it (it has private keys)");
+      } else line("PASS", ".env is owner-only (mode 600)");
     }
   } catch {
-    line("WARN", "no mcp.json in this folder — run 'agent-wallet init' to create a bot here");
+    line("WARN", "no .env in this folder — run 'agent-wallet init' to create a bot here");
+  }
+
+  // mcp.json should be present next to .env and load it via --env-file.
+  if (envExists) {
+    try {
+      const raw = await fs.readFile(mcpPath, "utf8");
+      if (/--env-file/.test(raw)) line("PASS", "mcp.json loads .env via --env-file");
+      else line("WARN", "mcp.json doesn't reference --env-file — re-run 'agent-wallet init'");
+    } catch {
+      line("WARN", "no mcp.json next to .env — re-run 'agent-wallet init'");
+    }
   }
 
   // NEXT_PUBLIC_ key/secret leak check (the Next.js footgun — inlined into client JS).

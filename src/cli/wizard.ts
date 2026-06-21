@@ -4,9 +4,10 @@
 // It generates all three wallets (Polygon, Hyperliquid, Solana), points your
 // agent at the MCP, and drops a plain-English WALLETS file telling you which
 // addresses to fund. There are NO prompts and NO password: the keys are written
-// as plaintext env vars into mcp.json, which the MCP reads directly. Everything
-// for one bot lands in a single folder, so making another bot is just `init`
-// again in a different folder.
+// as plaintext env vars into a .env file, and mcp.json loads that .env (via
+// `node --env-file`) so the MCP reads them directly. Everything for one bot lands
+// in a single folder, so making another bot is just `init` again in a different
+// folder.
 import {
   generateEvmKey,
   generateSolanaKey,
@@ -16,6 +17,8 @@ import { CHAINS, type Chain } from "../keystore/format.js";
 import {
   writeConfig,
   writeMcpJson,
+  buildEnvFile,
+  writeEnvFile,
   appendIgnore,
   renderWalletsFile,
   writeWalletsFile,
@@ -105,16 +108,18 @@ export async function runInit(argv: string[]): Promise<void> {
     wallets,
   };
 
-  // Everything for this bot goes in one folder (outDir): mcp.json (keys live
-  // here), config.json, WALLETS.txt, and the ignore guards.
-  const mcpPath = await writeMcpJson(cfg, keys, f.outDir);
+  // Everything for this bot goes in one folder (outDir): .env (the signing keys),
+  // mcp.json (loads that .env), config.json, WALLETS.txt, and the ignore guards.
+  const envPath = await writeEnvFile(buildEnvFile(cfg, keys), f.outDir);
+  const mcpPath = await writeMcpJson(cfg, f.outDir);
   const cfgPath = await writeConfig(cfg, f.outDir);
   const walletsPath = await writeWalletsFile(renderWalletsFile(entries, cfg), f.outDir);
   await appendIgnore(".gitignore", f.outDir);
   await appendIgnore(".dockerignore", f.outDir);
 
   out("");
-  out(`  mcp.json     -> ${mcpPath}   (point your agent here)`);
+  out(`  .env         -> ${envPath}   (your private keys — gitignored)`);
+  out(`  mcp.json     -> ${mcpPath}   (point your agent here; it loads .env)`);
   out(`  WALLETS.txt  -> ${walletsPath}   (fund these addresses + back up the keys)`);
   out(`  config.json  -> ${cfgPath}`);
   out("");
