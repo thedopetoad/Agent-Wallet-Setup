@@ -20,6 +20,9 @@ Usage:
 
 init flags:
   --mainnet                Arm real funds (requires --treasury + --daily-cap)
+  --no-seal                Mainnet without sealing a treasury — the withdraw
+                           destination is managed by the editable dashboard file
+                           (~/.starling/treasury.json). Still requires --daily-cap.
   --venues a,b,c           polygon,hyperliquid,solana (default: all)
   --unlock <mode>          keychain|env|tpm|kms|file (default: keychain)
   --non-interactive        Read passphrase from STARLING_PASSPHRASE env

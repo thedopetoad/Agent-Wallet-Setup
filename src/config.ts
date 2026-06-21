@@ -1,11 +1,14 @@
 // src/config.ts
-// Non-secret integration files the wizard writes around the keystore: the
-// Starling config, the MCP host config (mcp.json), ignore-file guards, and the
-// offline recovery sheet. NONE of these ever contain key material or the
-// passphrase.
+// Integration files the streamlined `init` writes for a bot: the Starling
+// config, the MCP host config (mcp.json), ignore-file guards, and a plain-English
+// WALLETS file. In the env-key model the bot's PRIVATE KEYS live in mcp.json's
+// `env` block (plaintext) and in WALLETS.txt — both are gitignored, never commit
+// them. Everything for one bot lands in a single folder so a second bot can't
+// clobber the first.
 import { promises as fs } from "node:fs";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { starlingDir, keystoreDir } from "./keystore/store.js";
 import type { Chain } from "./keystore/format.js";
 
 export type UnlockMode = "keychain" | "env" | "tpm" | "kms" | "file";

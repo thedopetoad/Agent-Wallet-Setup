@@ -42,6 +42,10 @@ interface Flags {
   unlock: UnlockMode;
   force: boolean;
   outDir: string;
+  /** Skip sealing a treasury into the keystore — the withdraw destination is then
+   *  managed entirely by the dashboard-pinned ~/.starling/treasury.json (editable).
+   *  Lets mainnet init proceed without --treasury; --daily-cap is still required. */
+  noSeal: boolean;
 }
 
 function parseFlags(argv: string[]): Flags {
@@ -65,6 +69,7 @@ function parseFlags(argv: string[]): Flags {
     unlock: (get("--unlock") as UnlockMode) ?? "keychain",
     force: has("--force"),
     outDir: get("--out") ?? process.cwd(),
+    noSeal: has("--no-seal") || get("--treasury-source") === "dashboard",
   };
 }
 
@@ -125,12 +130,24 @@ export async function runInit(argv: string[]): Promise<void> {
     }
   }
 
-  // mainnet safety gate — the de-risking floor cannot be skipped
+  // mainnet safety gate — the de-risking floor cannot be skipped.
+  // Two treasury models on mainnet:
+  //   sealed (default): a treasury address is AAD-bound into the keystore here.
+  //   --no-seal:        no treasury is sealed; the withdraw destination is managed
+  //                     by the editable dashboard file (~/.starling/treasury.json).
+  // Either way the --daily-cap floor is mandatory.
   let treasury = f.treasury;
   let dailyCap = f.dailyCap;
   if (network === "mainnet") {
+    if (f.noSeal) {
+      out(
+        "  treasury    -> DASHBOARD-MANAGED (no seal). Set/edit your withdraw address in\n" +
+          "                the Starling dashboard (writes ~/.starling/treasury.json). Until you\n" +
+          "                do, withdraws are refused fail-closed. (editable, sealed=false)",
+      );
+    }
     if (!f.nonInteractive) {
-      if (!treasury) {
+      if (!treasury && !f.noSeal) {
         const r = await prompts({
           type: "text",
           name: "t",
@@ -147,7 +164,9 @@ export async function runInit(argv: string[]): Promise<void> {
         dailyCap = Number(r.c);
       }
     }
-    if (!treasury) throw new Error("--mainnet requires a treasury sweep address");
+    if (!treasury && !f.noSeal) {
+      throw new Error("--mainnet requires a treasury sweep address (or pass --no-seal for a dashboard-managed one)");
+    }
     if (!dailyCap || dailyCap <= 0) {
       throw new Error("--mainnet requires a non-zero --daily-cap (the de-risking floor)");
     }
@@ -157,8 +176,9 @@ export async function runInit(argv: string[]): Promise<void> {
   const lowRam = freeMem() < 256 * 1024 * 1024; // <256MiB free → use KDF floor
   // Per-chain treasury sealed into each keystore (EVM addr for polygon/HL, base58
   // for solana). The interactive mainnet gate above sets `treasury` (EVM).
-  const treasuryEvm = f.treasuryEvm ?? treasury;
-  const treasurySol = f.treasurySol;
+  // --no-seal => seal nothing; the dashboard file is the (editable) destination.
+  const treasuryEvm = f.noSeal ? undefined : (f.treasuryEvm ?? treasury);
+  const treasurySol = f.noSeal ? undefined : f.treasurySol;
   const wallets: Partial<Record<Chain, string>> = {};
   const recovery: RecoveryEntry[] = [];
 
